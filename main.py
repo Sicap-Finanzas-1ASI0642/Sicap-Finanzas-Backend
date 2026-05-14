@@ -4,10 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 import models, schemas, utils
 from database import SessionLocal, engine
 
-# Inicializar la aplicación
-app = FastAPI(title="API SICAP - Simulador Financiero")
+# Crear tablas automáticamente al iniciar
+models.Base.metadata.create_all(bind=engine)
 
-# Configurar CORS para que React pueda conectarse
+app = FastAPI(title="SICAP API - Sistema Completo")
+
+# Configuración de CORS para que tu React/Frontend pueda conectarse
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,51 +17,70 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Endpoint para Simular y Guardar el Crédito
-@app.post("/simular", response_model=schemas.ResultadoSimulacion)
-def realizar_simulacion(entrada: schemas.SimulacionEntrada, db: Session = Depends(SessionLocal)):
-    # 1. Ejecutar el Algoritmo (Punto 7 del informe)
-    resultados = utils.calcular_motor_sicap(entrada)
-    
-    # 2. Guardar Cliente en la Base de Datos (Railway)
-    nuevo_cliente = models.Cliente(
-        nombre=entrada.nombre_cliente,
-        apellido=entrada.apellido_cliente,
-        dni=entrada.dni_cliente,
-        email=entrada.email_cliente,
-        telefono=entrada.telefono_cliente,
-        ingreso_mensual=entrada.ingreso_mensual
-    )
-    db.add(nuevo_cliente)
-    db.commit()
-    db.refresh(nuevo_cliente)
+def get_db():
+    db = SessionLocal()
+    try: yield db
+    finally: db.close()
 
-    # 3. Guardar Cabecera del Préstamo
-    nuevo_prestamo = models.Prestamo(
-        cliente_id=nuevo_cliente.id,
-        marca_vehiculo=entrada.marca_vehiculo,
-        modelo_vehiculo=entrada.modelo_vehiculo,
-        anio_vehiculo=entrada.anio_vehiculo,
-        precio_base=entrada.precio_base,
-        cuota_inicial=entrada.cuota_inicial,
-        plazo_meses=entrada.plazo_meses,
-        tasa_valor=entrada.tasa_valor,
-        monto_financiado=resultados["monto_financiado"],
-        tcea=resultados["tcea"],
-        van=resultados["van"],
-        tir_mensual=resultados["tir_mensual"]
-    )
-    db.add(nuevo_prestamo)
-    db.commit()
-    db.refresh(nuevo_prestamo)
-
-    # 4. Guardar Cronograma Detallado
-    for cuota in resultados["cronograma"]:
-        nuevo_paso = models.Cronograma(
-            prestamo_id=nuevo_prestamo.id,
-            **cuota # Esto mapea automáticamente los campos del diccionario
-        )
-        db.add(nuevo_paso)
+# --- ENDPOINT: REGISTRAR USUARIO ---
+@app.post("/usuarios/registrar", response_model=schemas.Usuario)
+def registrar_usuario(usuario: schemas.UsuarioCreate, db: Session = Depends(get_db)):
+    # Verificar si el username ya existe
+    existe = db.query(models.Usuario).filter(models.Usuario.username == usuario.username).first()
+    if existe:
+        raise HTTPException(status_code=400, detail="El nombre de usuario ya está registrado")
     
+    nuevo_usuario = models.Usuario(
+        username=usuario.username,
+        password_hash=usuario.password, # En producción usa hashing
+        nombre_completo=usuario.nombre_completo,
+        email=usuario.email,
+        dni=usuario.dni
+    )
+    db.add(nuevo_usuario)
     db.commit()
-    return resultados
+    db.refresh(nuevo_usuario)
+    return nuevo_usuario
+
+# --- ENDPOINT: LOGIN ---
+@app.post("/login", response_model=schemas.LoginResponse)
+def login(datos: schemas.UsuarioLogin, db: Session = Depends(get_db)):
+    user = db.query(models.Usuario).filter(models.Usuario.username == datos.username).first()
+    if not user or user.password_hash != datos.password:
+        raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+    
+    return {
+        "mensaje": "Login exitoso",
+        "usuario_id": user.id,
+        "username": user.username,
+        "nombre_completo": user.nombre_completo
+    }
+
+# --- ENDPOINT: SIMULAR Y GUARDAR ---
+@app.post("/simular", response_model=schemas.Simulacion)
+def realizar_simulacion(entrada: schemas.SimulacionCreate, db: Session = Depends(get_db)):
+    # 1. Calcular con el motor financiero
+    res = utils.calcular_motor_sicap(entrada)
+    
+    # 2. Guardar cabecera de simulación
+    sim = models.Simulacion(
+        **entrada.dict(),
+        monto_prestamo=res["monto_prestamo"],
+        van=res["van"],
+        tir=res["tir"],
+        tcea=res["tcea"]
+    )
+    db.add(sim)
+    db.commit()
+    db.refresh(sim)
+
+    # 3. Guardar el cronograma detallado
+    for cuota in res["cronograma"]:
+        db.add(models.Cronograma(simulacion_id=sim.id, **cuota))
+    db.commit()
+    
+    return sim
+
+@app.get("/bancos")
+def listar_bancos(db: Session = Depends(get_db)):
+    return db.query(models.Banco).all()
