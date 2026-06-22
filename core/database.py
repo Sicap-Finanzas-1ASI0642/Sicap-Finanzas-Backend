@@ -4,20 +4,17 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 
-# Cargar las variables del archivo .env
 load_dotenv()
 
-# Obtener la URL de conexión
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
+SQLALCHEMY_DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
-# Crear el Motor de conexión
+if not SQLALCHEMY_DATABASE_URL:
+    raise RuntimeError("La variable de entorno DATABASE_URL no está definida en .env")
+
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
-
-# Crear el generador de sesiones
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Crear la Clase Base
 Base = declarative_base()
+
 
 def get_db():
     db = SessionLocal()
