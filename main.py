@@ -1,86 +1,48 @@
-from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import models, schemas, utils
-from database import SessionLocal, engine
 
-# Crear tablas automáticamente al iniciar
-models.Base.metadata.create_all(bind=engine)
+from core.database import engine
+from models import *  # noqa: F401, F403
+from core.database import Base
+from routers import (
+    auth_router,
+    clientes_router,
+    vehiculos_router,
+    simulaciones_router,
+    catalogo_router,
+)
 
-app = FastAPI(title="SICAP API - Sistema Completo")
+# ── Crear tablas ───────────────────────────────────────────────────────────────
+Base.metadata.create_all(bind=engine)
 
-# Configuración de CORS para que tu React/Frontend pueda conectarse
+# ── Aplicación ─────────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="SICAP API",
+    description="Simulador de Créditos Automotrices Perú — Motor de cálculo financiero",
+    version="2.0.0",
+)
+
+# ── CORS ───────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # En producción: especificar dominios del frontend
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-def get_db():
-    db = SessionLocal()
-    try: yield db
-    finally: db.close()
+# ── Routers ────────────────────────────────────────────────────────────────────
+app.include_router(auth_router)
+app.include_router(clientes_router)
+app.include_router(vehiculos_router)
+app.include_router(simulaciones_router)
+app.include_router(catalogo_router)
 
-# --- ENDPOINT: REGISTRAR USUARIO ---
-@app.post("/usuarios/registrar", response_model=schemas.Usuario)
-def registrar_usuario(usuario: schemas.UsuarioCreate, db: Session = Depends(get_db)):
-    # Verificar si el username ya existe
-    existe = db.query(models.Usuario).filter(models.Usuario.username == usuario.username).first()
-    if existe:
-        raise HTTPException(status_code=400, detail="El nombre de usuario ya está registrado")
-    
-    nuevo_usuario = models.Usuario(
-        username=usuario.username,
-        password_hash=usuario.password, # En producción usa hashing
-        nombre_completo=usuario.nombre_completo,
-        email=usuario.email,
-        dni=usuario.dni
-    )
-    db.add(nuevo_usuario)
-    db.commit()
-    db.refresh(nuevo_usuario)
-    return nuevo_usuario
 
-# --- ENDPOINT: LOGIN ---
-@app.post("/login", response_model=schemas.LoginResponse)
-def login(datos: schemas.UsuarioLogin, db: Session = Depends(get_db)):
-    user = db.query(models.Usuario).filter(models.Usuario.username == datos.username).first()
-    if not user or user.password_hash != datos.password:
-        raise HTTPException(status_code=401, detail="Credenciales incorrectas")
-    
-    return {
-        "mensaje": "Login exitoso",
-        "usuario_id": user.id,
-        "username": user.username,
-        "nombre_completo": user.nombre_completo
-    }
+@app.get("/", tags=["Health"])
+def health_check():
+    return {"status": "ok", "sistema": "SICAP API v2.0"}
 
-# --- ENDPOINT: SIMULAR Y GUARDAR ---
-@app.post("/simular", response_model=schemas.Simulacion)
-def realizar_simulacion(entrada: schemas.SimulacionCreate, db: Session = Depends(get_db)):
-    # 1. Calcular con el motor financiero
-    res = utils.calcular_motor_sicap(entrada)
-    
-    # 2. Guardar cabecera de simulación
-    sim = models.Simulacion(
-        **entrada.dict(),
-        monto_prestamo=res["monto_prestamo"],
-        van=res["van"],
-        tir=res["tir"],
-        tcea=res["tcea"]
-    )
-    db.add(sim)
-    db.commit()
-    db.refresh(sim)
-
-    # 3. Guardar el cronograma detallado
-    for cuota in res["cronograma"]:
-        db.add(models.Cronograma(simulacion_id=sim.id, **cuota))
-    db.commit()
-    
-    return sim
-
-@app.get("/bancos")
-def listar_bancos(db: Session = Depends(get_db)):
-    return db.query(models.Banco).all()
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
