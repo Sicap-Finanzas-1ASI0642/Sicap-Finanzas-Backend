@@ -131,6 +131,147 @@ def crear_simulacion(
     return sim
 
 
+@router.put("/{simulacion_id}", response_model=SimulacionOut)
+def actualizar_simulacion(
+    simulacion_id: int,
+    datos: SimulacionCreate,
+    db: Session = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_current_user),
+):
+    """
+    Edita una simulación existente, recalcula el motor financiero
+    y reemplaza el cronograma anterior por uno nuevo.
+    """
+    # ── Buscar simulación del usuario autenticado ─────────────────────────────
+    sim = (
+        db.query(Simulacion)
+        .filter(
+            Simulacion.id == simulacion_id,
+            Simulacion.usuario_id == usuario_actual.id,
+        )
+        .first()
+    )
+
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulación no encontrada")
+
+    # ── Validar existencia de entidades relacionadas ──────────────────────────
+    cliente = db.query(Cliente).filter(Cliente.id == datos.cliente_id).first()
+    if not cliente:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+    vehiculo = db.query(Vehiculo).filter(Vehiculo.id == datos.vehiculo_id).first()
+    if not vehiculo:
+        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
+
+    if not db.query(Banco).filter(Banco.id == datos.banco_id).first():
+        raise HTTPException(status_code=404, detail="Banco no encontrado")
+
+    if not db.query(TipoMoneda).filter(TipoMoneda.id == datos.moneda_id).first():
+        raise HTTPException(status_code=404, detail="Moneda no encontrada")
+
+    # ── Validar cuota inicial vs precio del vehículo ──────────────────────────
+    if datos.cuota_inicial_monto >= vehiculo.precio_base:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La cuota inicial no puede ser mayor o igual al precio del vehículo",
+        )
+
+    # ── Recalcular motor financiero ───────────────────────────────────────────
+    try:
+        resultado = calcular_motor_sicap(
+            precio_base=Decimal(str(vehiculo.precio_base)),
+            cuota_inicial_monto=datos.cuota_inicial_monto,
+            plazo_meses=datos.plazo_meses,
+            tipo_tasa=datos.tipo_tasa,
+            tasa_valor=datos.tasa_valor,
+            capitalizacion_m=int(datos.capitalizacion_m) if datos.capitalizacion_m is not None else None,
+            periodos_gracia_total=datos.periodos_gracia_total,
+            periodos_gracia_parcial=datos.periodos_gracia_parcial,
+            cuota_balon_pct=datos.cuota_balon_pct,
+            seguro_vehicular_pct=datos.seguro_vehicular_pct,
+            seguro_desgravamen_pct=datos.seguro_desgravamen_pct,
+            costo_portes=datos.costo_portes,
+            costo_comisiones=datos.costo_comisiones,
+            fecha_inicio=datos.fecha_inicio,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
+
+    # ── Actualizar cabecera de simulación ─────────────────────────────────────
+    sim.cliente_id = datos.cliente_id
+    sim.vehiculo_id = datos.vehiculo_id
+    sim.banco_id = datos.banco_id
+    sim.moneda_id = datos.moneda_id
+
+    sim.cuota_inicial_monto = datos.cuota_inicial_monto
+    sim.monto_financiado = resultado.monto_financiado
+    sim.plazo_meses = datos.plazo_meses
+
+    sim.tipo_tasa = datos.tipo_tasa
+    sim.tasa_valor = datos.tasa_valor
+    sim.capitalizacion_m = datos.capitalizacion_m
+
+    sim.periodos_gracia_total = datos.periodos_gracia_total
+    sim.periodos_gracia_parcial = datos.periodos_gracia_parcial
+
+    sim.cuota_balon_pct = datos.cuota_balon_pct
+    sim.cuota_balon_monto = resultado.cuota_balon_monto
+
+    sim.seguro_vehicular_pct = datos.seguro_vehicular_pct
+    sim.seguro_desgravamen_pct = datos.seguro_desgravamen_pct
+    sim.costo_portes = datos.costo_portes
+    sim.costo_comisiones = datos.costo_comisiones
+
+    sim.fecha_inicio = datos.fecha_inicio
+
+    sim.tea_efectiva = resultado.tea_efectiva
+    sim.tasa_mensual = resultado.tasa_mensual
+    sim.cuota_ordinaria = resultado.cuota_ordinaria
+    sim.van = resultado.van
+    sim.tir_mensual = resultado.tir_mensual
+    sim.tcea = resultado.tcea
+    sim.total_intereses = resultado.total_intereses
+    sim.total_seguros = resultado.total_seguros
+    sim.total_portes = resultado.total_portes
+    sim.costo_total_credito = resultado.costo_total_credito
+
+    # ── Reemplazar cronograma anterior ────────────────────────────────────────
+    db.query(Cronograma).filter(
+        Cronograma.simulacion_id == sim.id
+    ).delete(synchronize_session=False)
+
+    db.flush()
+
+    nuevas_filas = [
+        Cronograma(
+            simulacion_id=sim.id,
+            nro_cuota=f.nro_cuota,
+            fecha_vencimiento=f.fecha_vencimiento if f.fecha_vencimiento is not None else None,
+            tipo_periodo=f.tipo_periodo,
+            saldo_inicial=f.saldo_inicial,
+            interes=f.interes,
+            amortizacion=f.amortizacion,
+            seguro_desgravamen=f.seguro_desgravamen,
+            seguro_vehicular=f.seguro_vehicular,
+            portes=f.portes,
+            comision=f.comision,
+            cuota_total=f.cuota_total,
+            saldo_final=f.saldo_final,
+        )
+        for f in resultado.cronograma
+    ]
+
+    db.bulk_save_objects(nuevas_filas)
+    db.commit()
+    db.refresh(sim)
+    db.expire(sim, ["cronograma"])
+
+    return sim
+
 @router.get("/", response_model=List[SimulacionResumen])
 def listar_simulaciones(
     skip: int = 0,
