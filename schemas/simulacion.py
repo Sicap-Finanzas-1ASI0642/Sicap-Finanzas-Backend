@@ -167,3 +167,91 @@ class SimulacionResumen(BaseModel):
     fecha_simulacion: datetime
 
     model_config = {"from_attributes": True}
+
+# ── Hoja Resumen SBS / Transparencia ──────────────────────────────────────────
+
+class ClienteHojaResumen(BaseModel):
+    id: int
+    nombre: str
+    apellido: str
+    dni: str
+    email: str
+    telefono: Optional[str]
+    ingreso_mensual: Decimal
+
+    model_config = {"from_attributes": True}
+
+
+class VehiculoHojaResumen(BaseModel):
+    id: int
+    marca: str
+    modelo: str
+    anio: int
+    condicion: str
+    precio_base: Decimal
+
+    model_config = {"from_attributes": True}
+
+
+class BancoHojaResumen(BaseModel):
+    id: int
+    nombre_banco: str
+
+    model_config = {"from_attributes": True}
+
+
+class MonedaHojaResumen(BaseModel):
+    id: int
+    codigo: str
+    nombre_moneda: str
+    simbolo: str
+
+    model_config = {"from_attributes": True}
+
+
+class DatosCreditoHojaResumen(BaseModel):
+    simulacion_id: int
+    fecha_inicio: date
+    fecha_simulacion: datetime
+    cuota_inicial_monto: Decimal
+    monto_financiado: Decimal
+    plazo_meses: int
+    tipo_tasa: str
+    tasa_valor: Decimal
+    capitalizacion_m: Optional[int]
+    tea_efectiva: Decimal
+    tasa_mensual: Decimal
+    cuota_ordinaria: Decimal
+    periodos_gracia_total: int
+    periodos_gracia_parcial: int
+    cuota_balon_pct: Decimal
+    cuota_balon_monto: Decimal
+
+
+class IndicadoresHojaResumen(BaseModel):
+    van: Decimal
+    tir_mensual: Decimal
+    tcea: Decimal
+
+
+class CostosHojaResumen(BaseModel):
+    seguro_vehicular_pct: Decimal
+    seguro_desgravamen_pct: Decimal
+    costo_portes: Decimal
+    costo_comisiones: Decimal
+    total_intereses: Decimal
+    total_seguros: Decimal
+    total_portes: Decimal
+    total_comisiones: Decimal
+    total_a_pagar: Decimal
+    costo_total_credito: Decimal
+
+
+class HojaResumenOut(BaseModel):
+    cliente: ClienteHojaResumen
+    vehiculo: VehiculoHojaResumen
+    banco: BancoHojaResumen
+    moneda: MonedaHojaResumen
+    credito: DatosCreditoHojaResumen
+    indicadores: IndicadoresHojaResumen
+    costos: CostosHojaResumen

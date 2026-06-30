@@ -7,7 +7,12 @@ from core.database import get_db
 from core.security import get_current_user
 from models import Simulacion, Cronograma, Cliente, Vehiculo, Banco, TipoMoneda
 from models.usuario import Usuario
-from schemas.simulacion import SimulacionCreate, SimulacionOut, SimulacionResumen
+from schemas.simulacion import (
+    SimulacionCreate,
+    SimulacionOut,
+    SimulacionResumen,
+    HojaResumenOut,
+)
 from services.motor_financiero import calcular_motor_sicap
 
 router = APIRouter(prefix="/simulaciones", tags=["Simulaciones"])
@@ -309,6 +314,76 @@ def obtener_simulacion(
         raise HTTPException(status_code=404, detail="Simulación no encontrada")
     return sim
 
+
+@router.get("/{simulacion_id}/hoja-resumen", response_model=HojaResumenOut)
+def obtener_hoja_resumen(
+    simulacion_id: int,
+    db: Session = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_current_user),
+):
+    """
+    Retorna la hoja resumen de una simulación guardada.
+
+    Esta respuesta está pensada para que el frontend muestre al usuario
+    el resumen de transparencia del crédito: cliente, vehículo, banco,
+    moneda, tasas, indicadores financieros y costos totales.
+    """
+    sim = (
+        db.query(Simulacion)
+        .filter(
+            Simulacion.id == simulacion_id,
+            Simulacion.usuario_id == usuario_actual.id,
+        )
+        .first()
+    )
+
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulación no encontrada")
+
+    total_comisiones = sum((fila.comision for fila in sim.cronograma), Decimal("0.00"))
+    total_a_pagar = sum((fila.cuota_total for fila in sim.cronograma), Decimal("0.00"))
+
+    return {
+        "cliente": sim.cliente,
+        "vehiculo": sim.vehiculo,
+        "banco": sim.banco,
+        "moneda": sim.moneda,
+        "credito": {
+            "simulacion_id": sim.id,
+            "fecha_inicio": sim.fecha_inicio,
+            "fecha_simulacion": sim.fecha_simulacion,
+            "cuota_inicial_monto": sim.cuota_inicial_monto,
+            "monto_financiado": sim.monto_financiado,
+            "plazo_meses": sim.plazo_meses,
+            "tipo_tasa": sim.tipo_tasa,
+            "tasa_valor": sim.tasa_valor,
+            "capitalizacion_m": sim.capitalizacion_m,
+            "tea_efectiva": sim.tea_efectiva,
+            "tasa_mensual": sim.tasa_mensual,
+            "cuota_ordinaria": sim.cuota_ordinaria,
+            "periodos_gracia_total": sim.periodos_gracia_total,
+            "periodos_gracia_parcial": sim.periodos_gracia_parcial,
+            "cuota_balon_pct": sim.cuota_balon_pct,
+            "cuota_balon_monto": sim.cuota_balon_monto,
+        },
+        "indicadores": {
+            "van": sim.van,
+            "tir_mensual": sim.tir_mensual,
+            "tcea": sim.tcea,
+        },
+        "costos": {
+            "seguro_vehicular_pct": sim.seguro_vehicular_pct,
+            "seguro_desgravamen_pct": sim.seguro_desgravamen_pct,
+            "costo_portes": sim.costo_portes,
+            "costo_comisiones": sim.costo_comisiones,
+            "total_intereses": sim.total_intereses,
+            "total_seguros": sim.total_seguros,
+            "total_portes": sim.total_portes,
+            "total_comisiones": total_comisiones,
+            "total_a_pagar": total_a_pagar,
+            "costo_total_credito": sim.costo_total_credito,
+        },
+    }
 
 @router.delete("/{simulacion_id}", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_simulacion(
