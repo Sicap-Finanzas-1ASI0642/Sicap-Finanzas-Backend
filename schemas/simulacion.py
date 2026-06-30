@@ -86,6 +86,29 @@ class SimulacionCreate(BaseModel):
         if not (Decimal("0.00") <= v <= Decimal("0.50")):
             raise ValueError("El porcentaje de cuota balón debe estar entre 0% y 50%")
         return v
+    
+    
+    @field_validator("cuota_inicial_monto", "costo_portes", "costo_comisiones")
+    @classmethod
+    def montos_no_negativos(cls, v: Decimal) -> Decimal:
+        if v < 0:
+            raise ValueError("Los montos no pueden ser negativos")
+        return v
+
+    @field_validator("periodos_gracia_total", "periodos_gracia_parcial")
+    @classmethod
+    def periodos_gracia_rango(cls, v: int) -> int:
+        if not (0 <= v <= 6):
+            raise ValueError("Los periodos de gracia deben estar entre 0 y 6 meses")
+        return v
+
+    @field_validator("seguro_vehicular_pct", "seguro_desgravamen_pct")
+    @classmethod
+    def seguros_rango(cls, v: Decimal) -> Decimal:
+        if not (Decimal("0.0000") <= v <= Decimal("0.0100")):
+            raise ValueError("Los seguros deben estar entre 0% y 1% mensual")
+        return v
+    
 
     @model_validator(mode="after")
     def validar_capitalizacion_y_gracia(self) -> "SimulacionCreate":
