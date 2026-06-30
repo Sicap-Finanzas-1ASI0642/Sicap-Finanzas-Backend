@@ -191,6 +191,11 @@ def test_motor_gracia_total():
     assert fila_g2.tipo_periodo == TIPO_GRACIA_TOTAL
     assert fila_g1.cuota_total == _d("0.00"), "En gracia total no se paga nada"
     assert fila_g2.cuota_total == _d("0.00")
+    for fila in (fila_g1, fila_g2):
+        assert fila.seguro_vehicular == _d("0.00"), "En gracia total no se cobra seguro vehicular"
+        assert fila.seguro_desgravamen == _d("0.00"), "En gracia total no se cobra seguro de desgravamen"
+        assert fila.portes == _d("0.00"), "En gracia total no se cobran portes"
+        assert fila.comision == _d("0.00"), "En gracia total no se cobran comisiones"
     assert fila_g2.saldo_inicial > _d("40000.00"), "Saldo debe crecer por capitalización"
 
     # Filas ordinarias

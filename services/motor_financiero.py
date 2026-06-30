@@ -181,14 +181,20 @@ def _m2_aplicar_gracia(
     saldo = saldo_inicial
     nro = 0
 
-    # ── Gracia total ──────────────────────────────────────────────────────────
+       # ── Gracia total ──────────────────────────────────────────────────────────
     for _ in range(periodos_gracia_total):
         nro += 1
         fecha = _fecha_cuota(fecha_inicio, nro)
+
+        # En gracia total el cliente no paga nada.
+        # Solo se calcula el interés y se capitaliza al saldo.
         interes = _r2(saldo * tem)
-        seg_deg = _r2(saldo * seguro_desgravamen_pct)
-        seg_veh = _r2(saldo * seguro_vehicular_pct)
-        saldo_final = _r2(saldo + interes)  # capitalización
+        seg_deg = Decimal("0.00")
+        seg_veh = Decimal("0.00")
+        portes_periodo = Decimal("0.00")
+        comision_periodo = Decimal("0.00")
+        cuota_total = Decimal("0.00")
+        saldo_final = _r2(saldo + interes)
 
         filas.append(FilaCronograma(
             nro_cuota=nro,
@@ -199,9 +205,9 @@ def _m2_aplicar_gracia(
             amortizacion=Decimal("0.00"),
             seguro_desgravamen=seg_deg,
             seguro_vehicular=seg_veh,
-            portes=portes,
-            comision=comision,
-            cuota_total=Decimal("0.00"),  # no paga nada
+            portes=portes_periodo,
+            comision=comision_periodo,
+            cuota_total=cuota_total,
             saldo_final=saldo_final,
         ))
         saldo = saldo_final
@@ -556,9 +562,10 @@ def calcular_motor_sicap(
         sum((f.seguro_vehicular + f.seguro_desgravamen for f in cronograma_completo), Decimal("0.00"))
     )
     total_portes = _r2(sum((f.portes for f in cronograma_completo), Decimal("0.00")))
+    total_comisiones = _r2(sum((f.comision for f in cronograma_completo), Decimal("0.00")))
+
     costo_total_credito = _r2(
-        monto_financiado + total_intereses + total_seguros + total_portes
-        + comision * _d(plazo_meses)
+        monto_financiado + total_intereses + total_seguros + total_portes + total_comisiones
     )
 
     # ── M5: Indicadores financieros ───────────────────────────────────────────
