@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
+from datetime import date
 from decimal import Decimal
 
 from core.database import get_db
@@ -279,20 +280,55 @@ def actualizar_simulacion(
 
 @router.get("/", response_model=List[SimulacionResumen])
 def listar_simulaciones(
+    cliente_id: Optional[int] = None,
+    vehiculo_id: Optional[int] = None,
+    banco_id: Optional[int] = None,
+    moneda_id: Optional[int] = None,
+    fecha_desde: Optional[date] = None,
+    fecha_hasta: Optional[date] = None,
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
     usuario_actual: Usuario = Depends(get_current_user),
 ):
-    """Lista las simulaciones del usuario autenticado (sin cronograma)."""
-    return (
-        db.query(Simulacion)
-        .filter(Simulacion.usuario_id == usuario_actual.id)
+    """
+    Lista las simulaciones del usuario autenticado.
+
+    Permite filtrar el historial por cliente, vehículo, banco, moneda
+    y rango de fechas. Esto facilita que el frontend construya la pantalla
+    de historial de operaciones.
+    """
+    query = db.query(Simulacion).filter(
+        Simulacion.usuario_id == usuario_actual.id
+    )
+
+    if cliente_id is not None:
+        query = query.filter(Simulacion.cliente_id == cliente_id)
+
+    if vehiculo_id is not None:
+        query = query.filter(Simulacion.vehiculo_id == vehiculo_id)
+
+    if banco_id is not None:
+        query = query.filter(Simulacion.banco_id == banco_id)
+
+    if moneda_id is not None:
+        query = query.filter(Simulacion.moneda_id == moneda_id)
+
+    if fecha_desde is not None:
+        query = query.filter(Simulacion.fecha_simulacion >= fecha_desde)
+
+    if fecha_hasta is not None:
+        query = query.filter(Simulacion.fecha_simulacion < fecha_hasta)
+
+    simulaciones = (
+        query
         .order_by(Simulacion.fecha_simulacion.desc())
         .offset(skip)
         .limit(limit)
         .all()
     )
+
+    return simulaciones
 
 
 @router.get("/{simulacion_id}", response_model=SimulacionOut)
