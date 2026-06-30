@@ -191,6 +191,11 @@ def test_motor_gracia_total():
     assert fila_g2.tipo_periodo == TIPO_GRACIA_TOTAL
     assert fila_g1.cuota_total == _d("0.00"), "En gracia total no se paga nada"
     assert fila_g2.cuota_total == _d("0.00")
+    for fila in (fila_g1, fila_g2):
+        assert fila.seguro_vehicular == _d("0.00"), "En gracia total no se cobra seguro vehicular"
+        assert fila.seguro_desgravamen == _d("0.00"), "En gracia total no se cobra seguro de desgravamen"
+        assert fila.portes == _d("0.00"), "En gracia total no se cobran portes"
+        assert fila.comision == _d("0.00"), "En gracia total no se cobran comisiones"
     assert fila_g2.saldo_inicial > _d("40000.00"), "Saldo debe crecer por capitalización"
 
     # Filas ordinarias
@@ -297,6 +302,32 @@ def test_motor_compra_inteligente():
     print(f"  Monto balón      : S/ {con_balon.cuota_balon_monto}")
     print(f"  Cuota final      : S/ {ultima_fila.cuota_total}")
 
+def test_tir_financiera_y_tcea_total_se_calculan_separadas():
+    """
+    La TIR mensual financiera usa solo interés + amortización.
+    La TCEA usa la cuota total, incluyendo seguros y portes.
+    """
+    resultado = calcular_motor_sicap(
+        precio_base=50000,
+        cuota_inicial_monto=10000,
+        plazo_meses=24,
+        tipo_tasa="TEA",
+        tasa_valor=0.12,
+        capitalizacion_m=None,
+        periodos_gracia_total=0,
+        periodos_gracia_parcial=0,
+        cuota_balon_pct=0,
+        seguro_vehicular_pct=0.0050,
+        seguro_desgravamen_pct=0.0004,
+        costo_portes=3.50,
+        costo_comisiones=0,
+        fecha_inicio=date(2025, 1, 1),
+    )
+
+    tir_financiera_anual = (1 + resultado.tir_mensual) ** _d(12) - 1
+
+    assert resultado.tir_mensual > _d("0.00")
+    assert resultado.tcea > tir_financiera_anual
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Runner manual
@@ -314,6 +345,7 @@ if __name__ == "__main__":
         test_motor_gracia_total,
         test_motor_gracia_parcial,
         test_motor_compra_inteligente,
+        test_tir_financiera_y_tcea_total_se_calculan_separadas,
     ]
 
     pasados = 0
@@ -327,3 +359,5 @@ if __name__ == "__main__":
 
     print(f"\n{'='*50}")
     print(f"Resultado: {pasados}/{len(tests)} tests pasados")
+
+    

@@ -181,14 +181,20 @@ def _m2_aplicar_gracia(
     saldo = saldo_inicial
     nro = 0
 
-    # ── Gracia total ──────────────────────────────────────────────────────────
+       # ── Gracia total ──────────────────────────────────────────────────────────
     for _ in range(periodos_gracia_total):
         nro += 1
         fecha = _fecha_cuota(fecha_inicio, nro)
+
+        # En gracia total el cliente no paga nada.
+        # Solo se calcula el interés y se capitaliza al saldo.
         interes = _r2(saldo * tem)
-        seg_deg = _r2(saldo * seguro_desgravamen_pct)
-        seg_veh = _r2(saldo * seguro_vehicular_pct)
-        saldo_final = _r2(saldo + interes)  # capitalización
+        seg_deg = Decimal("0.00")
+        seg_veh = Decimal("0.00")
+        portes_periodo = Decimal("0.00")
+        comision_periodo = Decimal("0.00")
+        cuota_total = Decimal("0.00")
+        saldo_final = _r2(saldo + interes)
 
         filas.append(FilaCronograma(
             nro_cuota=nro,
@@ -199,9 +205,9 @@ def _m2_aplicar_gracia(
             amortizacion=Decimal("0.00"),
             seguro_desgravamen=seg_deg,
             seguro_vehicular=seg_veh,
-            portes=portes,
-            comision=comision,
-            cuota_total=Decimal("0.00"),  # no paga nada
+            portes=portes_periodo,
+            comision=comision_periodo,
+            cuota_total=cuota_total,
             saldo_final=saldo_final,
         ))
         saldo = saldo_final
@@ -366,46 +372,50 @@ def _m5_indicadores(
     costo_comisiones_iniciales: Decimal = Decimal("0.00"),
 ) -> tuple[Decimal, Decimal, Decimal]:
     """
-    Calcula VAN, TIR mensual y TCEA.
+    Calcula VAN, TIR mensual financiera y TCEA.
 
-    VAN (perspectiva deudor, COK = TEA del préstamo = tem):
-        FC0 = +monto_financiado (inflow: recibe el dinero)
-        FCk = −cuota_total_k    (outflow: paga cada mes)
-        VAN = monto_financiado − Σ [cuota_total_k / (1+i)^k]
-        Con COK = i (TEM), el VAN ≈ 0 (referencial, confirma consistencia).
+    VAN:
+        Se calcula desde la perspectiva del deudor usando los pagos totales
+        del cronograma y la TEM como tasa de descuento referencial.
 
-    TIR mensual:
-        Raíz de: −monto_financiado + Σ [cuota_total_k / (1+TIR)^k] = 0
-        Se resuelve por bisección (Newton-Raphson como refinamiento).
+    TIR mensual financiera:
+        Usa solo los pagos financieros reales del préstamo:
+        interés + amortización. No incluye seguros, portes ni comisiones.
 
     TCEA:
-        Incluye seguros + portes + comisiones → flujo total.
-        TCEA = (1 + TIR_mensual_total)^12 − 1
-
-    Nota: Los flujos de gracia total tienen cuota = 0 (no hay desembolso).
+        Usa los pagos totales del cronograma. Incluye interés, amortización,
+        seguros, portes y comisiones. Luego se anualiza la tasa mensual total.
     """
-    # ── Construir vector de flujos totales (con seguros, portes, comisiones) ──
-    # FC0 = monto prestado menos comisiones iniciales (desembolso neto recibido)
+    # FC0 = monto prestado menos comisiones iniciales, si existieran.
     fc0 = monto_financiado - costo_comisiones_iniciales
 
+    # ── Flujo total: base para VAN y TCEA ────────────────────────────────────
     flujos_total: List[Decimal] = [fc0]
     for fila in cronograma:
         flujos_total.append(-fila.cuota_total)
 
-    # ── VAN con COK = TEM (referencial) ──────────────────────────────────────
+    # ── VAN con COK = TEM del préstamo (referencial) ─────────────────────────
     van = fc0
     for k, fc in enumerate(flujos_total[1:], start=1):
         van += fc / (1 + tem) ** _d(k)
     van = _r2(van)
 
-    # ── TIR mensual (bisección) ───────────────────────────────────────────────
-    tir_mensual = _biseccion_tir(flujos_total)
+    # ── Flujo financiero: base para TIR mensual financiera ───────────────────
+    flujos_financieros: List[Decimal] = [fc0]
+    for fila in cronograma:
+        if fila.tipo_periodo == TIPO_GRACIA_TOTAL:
+            pago_financiero = Decimal("0.00")
+        else:
+            pago_financiero = _r2(fila.interes + fila.amortizacion)
+        flujos_financieros.append(-pago_financiero)
 
-    # ── TCEA ─────────────────────────────────────────────────────────────────
-    tcea = _r8((1 + tir_mensual) ** _d(12) - 1)
+    tir_mensual_financiera = _biseccion_tir(flujos_financieros)
 
-    return van, _r8(tir_mensual), tcea
+    # ── TCEA: TIR de flujos totales anualizada ───────────────────────────────
+    tir_mensual_total = _biseccion_tir(flujos_total)
+    tcea = _r8((1 + tir_mensual_total) ** _d(12) - 1)
 
+    return van, _r8(tir_mensual_financiera), tcea
 
 def _npv(tasa: Decimal, flujos: List[Decimal]) -> Decimal:
     """VAN a una tasa dada (para el solver de TIR)."""
@@ -556,9 +566,10 @@ def calcular_motor_sicap(
         sum((f.seguro_vehicular + f.seguro_desgravamen for f in cronograma_completo), Decimal("0.00"))
     )
     total_portes = _r2(sum((f.portes for f in cronograma_completo), Decimal("0.00")))
+    total_comisiones = _r2(sum((f.comision for f in cronograma_completo), Decimal("0.00")))
+
     costo_total_credito = _r2(
-        monto_financiado + total_intereses + total_seguros + total_portes
-        + comision * _d(plazo_meses)
+        monto_financiado + total_intereses + total_seguros + total_portes + total_comisiones
     )
 
     # ── M5: Indicadores financieros ───────────────────────────────────────────
