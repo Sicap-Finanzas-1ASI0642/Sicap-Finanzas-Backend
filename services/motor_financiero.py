@@ -181,14 +181,20 @@ def _m2_aplicar_gracia(
     saldo = saldo_inicial
     nro = 0
 
-    # ── Gracia total ──────────────────────────────────────────────────────────
+       # ── Gracia total ──────────────────────────────────────────────────────────
     for _ in range(periodos_gracia_total):
         nro += 1
         fecha = _fecha_cuota(fecha_inicio, nro)
+
+        # En gracia total el cliente no paga nada.
+        # Solo se calcula el interés y se capitaliza al saldo.
         interes = _r2(saldo * tem)
-        seg_deg = _r2(saldo * seguro_desgravamen_pct)
-        seg_veh = _r2(saldo * seguro_vehicular_pct)
-        saldo_final = _r2(saldo + interes)  # capitalización
+        seg_deg = Decimal("0.00")
+        seg_veh = Decimal("0.00")
+        portes_periodo = Decimal("0.00")
+        comision_periodo = Decimal("0.00")
+        cuota_total = Decimal("0.00")
+        saldo_final = _r2(saldo + interes)
 
         filas.append(FilaCronograma(
             nro_cuota=nro,
@@ -199,9 +205,9 @@ def _m2_aplicar_gracia(
             amortizacion=Decimal("0.00"),
             seguro_desgravamen=seg_deg,
             seguro_vehicular=seg_veh,
-            portes=portes,
-            comision=comision,
-            cuota_total=Decimal("0.00"),  # no paga nada
+            portes=portes_periodo,
+            comision=comision_periodo,
+            cuota_total=cuota_total,
             saldo_final=saldo_final,
         ))
         saldo = saldo_final
@@ -243,14 +249,21 @@ def _m3_compra_inteligente(
     cuota_balon_pct: Decimal,
     tem: Decimal,
     n_ordinario: int,
+    base_balon: Optional[Decimal] = None,
 ) -> tuple[Decimal, Decimal, Decimal]:
     """
     Calcula el PV ajustado descontando el valor presente de la Cuota Balón.
 
     Fórmula N°66 (Senmache) — ecuación de valor con cuota final:
-        CB = saldo_efectivo × β
+        CB = monto_financiado_original × β   (base del balón)
         VP_CB = CB / (1 + i)^n
         PV* = saldo_efectivo − VP_CB
+
+    El balón es un porcentaje del capital financiado ORIGINAL (precio − cuota
+    inicial), no de una deuda inflada por la gracia. Por eso se calcula sobre
+    `base_balon` (monto financiado original) y no sobre `saldo_efectivo`
+    (saldo post-gracia). Cuando no hay gracia ambos coinciden.
+    Si no se especifica `base_balon`, se usa `saldo_efectivo` (compatibilidad).
 
     La cuota ordinaria se calcula sobre PV* (no sobre el saldo completo),
     lo que genera cuotas mensuales más bajas al diferir el balón.
@@ -259,7 +272,9 @@ def _m3_compra_inteligente(
     -------
     (cuota_balon_monto, vp_cuota_balon, pv_ajustado)
     """
-    cb = _r2(saldo_efectivo * cuota_balon_pct)
+    if base_balon is None:
+        base_balon = saldo_efectivo
+    cb = _r2(base_balon * cuota_balon_pct)
     n = _d(n_ordinario)
     vp_cb = _r2(cb / (1 + tem) ** n)
     pv_star = _r2(saldo_efectivo - vp_cb)
@@ -362,50 +377,56 @@ def _m4_cronograma(
 def _m5_indicadores(
     monto_financiado: Decimal,
     cronograma: List[FilaCronograma],
-    tem: Decimal,
+    cok_mensual: Decimal,
     costo_comisiones_iniciales: Decimal = Decimal("0.00"),
 ) -> tuple[Decimal, Decimal, Decimal]:
     """
-    Calcula VAN, TIR mensual y TCEA.
+    Calcula VAN, TIR mensual financiera y TCEA.
 
-    VAN (perspectiva deudor, COK = TEA del préstamo = tem):
-        FC0 = +monto_financiado (inflow: recibe el dinero)
-        FCk = −cuota_total_k    (outflow: paga cada mes)
-        VAN = monto_financiado − Σ [cuota_total_k / (1+i)^k]
-        Con COK = i (TEM), el VAN ≈ 0 (referencial, confirma consistencia).
+    VAN:
+        Se calcula desde la perspectiva del deudor descontando los pagos
+        totales del cronograma al Costo de Oportunidad del Capital (COK)
+        mensual del deudor, NO a la tasa i del propio préstamo.
+            VAN = S0 − Σ [FC_k / (1 + cok_mensual)^k]
 
-    TIR mensual:
-        Raíz de: −monto_financiado + Σ [cuota_total_k / (1+TIR)^k] = 0
-        Se resuelve por bisección (Newton-Raphson como refinamiento).
+    TIR mensual financiera:
+        Usa solo los pagos financieros reales del préstamo:
+        interés + amortización. No incluye seguros, portes ni comisiones.
 
     TCEA:
-        Incluye seguros + portes + comisiones → flujo total.
-        TCEA = (1 + TIR_mensual_total)^12 − 1
-
-    Nota: Los flujos de gracia total tienen cuota = 0 (no hay desembolso).
+        Usa los pagos totales del cronograma. Incluye interés, amortización,
+        seguros, portes y comisiones. Luego se anualiza la tasa mensual total.
     """
-    # ── Construir vector de flujos totales (con seguros, portes, comisiones) ──
-    # FC0 = monto prestado menos comisiones iniciales (desembolso neto recibido)
+    # FC0 = monto prestado menos comisiones iniciales, si existieran.
     fc0 = monto_financiado - costo_comisiones_iniciales
 
+    # ── Flujo total: base para VAN y TCEA ────────────────────────────────────
     flujos_total: List[Decimal] = [fc0]
     for fila in cronograma:
         flujos_total.append(-fila.cuota_total)
 
-    # ── VAN con COK = TEM (referencial) ──────────────────────────────────────
+    # ── VAN descontado al COK del deudor (perspectiva del deudor) ────────────
     van = fc0
     for k, fc in enumerate(flujos_total[1:], start=1):
-        van += fc / (1 + tem) ** _d(k)
+        van += fc / (1 + cok_mensual) ** _d(k)
     van = _r2(van)
 
-    # ── TIR mensual (bisección) ───────────────────────────────────────────────
-    tir_mensual = _biseccion_tir(flujos_total)
+    # ── Flujo financiero: base para TIR mensual financiera ───────────────────
+    flujos_financieros: List[Decimal] = [fc0]
+    for fila in cronograma:
+        if fila.tipo_periodo == TIPO_GRACIA_TOTAL:
+            pago_financiero = Decimal("0.00")
+        else:
+            pago_financiero = _r2(fila.interes + fila.amortizacion)
+        flujos_financieros.append(-pago_financiero)
 
-    # ── TCEA ─────────────────────────────────────────────────────────────────
-    tcea = _r8((1 + tir_mensual) ** _d(12) - 1)
+    tir_mensual_financiera = _biseccion_tir(flujos_financieros)
 
-    return van, _r8(tir_mensual), tcea
+    # ── TCEA: TIR de flujos totales anualizada ───────────────────────────────
+    tir_mensual_total = _biseccion_tir(flujos_total)
+    tcea = _r8((1 + tir_mensual_total) ** _d(12) - 1)
 
+    return van, _r8(tir_mensual_financiera), tcea
 
 def _npv(tasa: Decimal, flujos: List[Decimal]) -> Decimal:
     """VAN a una tasa dada (para el solver de TIR)."""
@@ -415,36 +436,79 @@ def _npv(tasa: Decimal, flujos: List[Decimal]) -> Decimal:
     return resultado
 
 
+def _npv_derivada(tasa: Decimal, flujos: List[Decimal]) -> Decimal:
+    """
+    Derivada del VAN respecto a la tasa (para el paso de Newton-Raphson):
+        f'(r) = Σ −k·FC_k / (1+r)^(k+1)
+    """
+    resultado = Decimal("0")
+    for k, fc in enumerate(flujos):
+        if k == 0:
+            continue
+        resultado += -_d(k) * fc / (1 + tasa) ** _d(k + 1)
+    return resultado
+
+
 def _biseccion_tir(flujos: List[Decimal]) -> Decimal:
     """
-    Calcula la TIR por bisección.
+    Calcula la TIR mediante bisección con aceleración Newton-Raphson (rtsafe).
+
+    La bisección es el método base que garantiza convergencia: el intervalo
+    [lo, hi] siempre conserva el cambio de signo, y cada vez que Newton no
+    sirve se recurre al punto medio de ese intervalo. Sobre la mejor
+    estimación conocida de la raíz (r_iter, inicialmente el punto medio) se
+    intenta un paso de Newton-Raphson (r_new = r_iter − f(r_iter)/f'(r_iter));
+    si r_new cae dentro del intervalo vigente y reduce |f|, se acepta y sirve
+    de base para el siguiente intento de Newton (esto habilita la convergencia
+    cuadrática real). Si r_new se sale del intervalo o no mejora, esa
+    iteración cae de vuelta al punto medio de bisección, por lo que el método
+    nunca diverge.
+
     Asume FC0 > 0 y al menos un FC negativo.
-    Tolerancia: |NPV| < 0.000001
+    Tolerancia: |NPV| < TOLERANCIA_TIR
     """
     lo = Decimal("0.000001")
     hi = Decimal("10.0")  # 1000% mensual como límite superior
 
     npv_lo = _npv(lo, flujos)
+    npv_hi = _npv(hi, flujos)
 
     # Asegurar que haya cambio de signo
-    if npv_lo * _npv(hi, flujos) > 0:
+    if npv_lo * npv_hi > 0:
         # Fallback: devolver estimación razonable
         return Decimal("0.01")
 
+    r_iter = (lo + hi) / DOS
+    f_iter = _npv(r_iter, flujos)
+
     for _ in range(MAX_ITER_TIR):
-        mid = (lo + hi) / DOS
-        npv_mid = _npv(mid, flujos)
+        if abs(f_iter) < TOLERANCIA_TIR:
+            return r_iter
 
-        if abs(npv_mid) < TOLERANCIA_TIR:
-            return mid
-
-        if npv_lo * npv_mid < 0:
-            hi = mid
+        # Actualizar el intervalo de bisección conservando el cambio de signo
+        if npv_lo * f_iter < 0:
+            hi = r_iter
         else:
-            lo = mid
-            npv_lo = npv_mid
+            lo = r_iter
+            npv_lo = f_iter
 
-    return (lo + hi) / DOS
+        # Intento de paso Newton-Raphson desde la mejor estimación conocida
+        derivada = _npv_derivada(r_iter, flujos)
+        paso_newton_valido = False
+        if derivada != 0:
+            r_new = r_iter - f_iter / derivada
+            if lo < r_new < hi:
+                f_new = _npv(r_new, flujos)
+                if abs(f_new) < abs(f_iter):
+                    r_iter, f_iter = r_new, f_new
+                    paso_newton_valido = True
+
+        if not paso_newton_valido:
+            # Respaldo robusto: punto medio de bisección
+            r_iter = (lo + hi) / DOS
+            f_iter = _npv(r_iter, flujos)
+
+    return r_iter
 
 
 # ── Helper: fecha de vencimiento ───────────────────────────────────────────────
@@ -479,6 +543,8 @@ def calcular_motor_sicap(
     seguro_desgravamen_pct: float | Decimal,
     costo_portes: float | Decimal,
     costo_comisiones: float | Decimal,
+    # Costo de oportunidad del capital del deudor (tasa de descuento del VAN)
+    cok_anual: float | Decimal = Decimal("0.18"),
     # Fechas
     fecha_inicio: Optional[date] = None,
 ) -> ResultadoMotor:
@@ -488,7 +554,7 @@ def calcular_motor_sicap(
     Todos los porcentajes se reciben como decimales puros:
         tasa_valor = 0.1200  (= 12%)
         cuota_balon_pct = 0.30  (= 30%)
-        seguro_vehicular_pct = 0.0050  (= 0.50% mensual)
+        seguro_vehicular_pct = 0.0005  (= 0.05% mensual)
         seguro_desgravamen_pct = 0.0004 (= 0.04% mensual)
     """
     # ── Convertir a Decimal ────────────────────────────────────────────────────
@@ -507,6 +573,10 @@ def calcular_motor_sicap(
 
     # ── M1: Conversión de tasas ────────────────────────────────────────────────
     tea, tem = _m1_convertir_tasas(tipo_tasa, _d(tasa_valor), capitalizacion_m)
+
+    # ── COK del deudor → tasa mensual de descuento del VAN ─────────────────────
+    cok = _d(cok_anual)
+    cok_mensual = (1 + cok) ** (_d(DIAS_MES) / _d(DIAS_ANIO)) - 1
 
     # ── M2: Períodos de gracia ─────────────────────────────────────────────────
     saldo_post_gracia, nro_fin_gracia, filas_gracia = _m2_aplicar_gracia(
@@ -528,6 +598,7 @@ def calcular_motor_sicap(
         cuota_balon_pct=balon_pct,
         tem=tem,
         n_ordinario=n_ordinario,
+        base_balon=monto_financiado,
     )
 
     # Cuota ordinaria (para exponer en el resumen)
@@ -556,16 +627,17 @@ def calcular_motor_sicap(
         sum((f.seguro_vehicular + f.seguro_desgravamen for f in cronograma_completo), Decimal("0.00"))
     )
     total_portes = _r2(sum((f.portes for f in cronograma_completo), Decimal("0.00")))
+    total_comisiones = _r2(sum((f.comision for f in cronograma_completo), Decimal("0.00")))
+
     costo_total_credito = _r2(
-        monto_financiado + total_intereses + total_seguros + total_portes
-        + comision * _d(plazo_meses)
+        monto_financiado + total_intereses + total_seguros + total_portes + total_comisiones
     )
 
     # ── M5: Indicadores financieros ───────────────────────────────────────────
     van, tir_mensual, tcea = _m5_indicadores(
         monto_financiado=monto_financiado,
         cronograma=cronograma_completo,
-        tem=tem,
+        cok_mensual=cok_mensual,
     )
 
     return ResultadoMotor(

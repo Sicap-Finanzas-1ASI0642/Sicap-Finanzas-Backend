@@ -31,6 +31,8 @@ class Simulacion(Base):
     tasa_valor = Column(Numeric(8, 6), nullable=False)  # decimal puro, ej. 0.1200 = 12%
     capitalizacion_m = Column(Integer, nullable=True)   # solo si TNA: 12, 4, 2, 360, etc.
 
+    cok_anual = Column(Numeric(8, 6), default=0.18, nullable=False)  # COK del deudor, tasa de descuento del VAN
+
     periodos_gracia_total = Column(Integer, default=0, nullable=False)
     periodos_gracia_parcial = Column(Integer, default=0, nullable=False)
 
