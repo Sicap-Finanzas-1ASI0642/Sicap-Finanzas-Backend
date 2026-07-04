@@ -48,8 +48,11 @@ class SimulacionCreate(BaseModel):
     # Compra Inteligente
     cuota_balon_pct: Decimal = Decimal("0.00")  # 0.30 = 30%
 
+    # Costo de oportunidad del capital del deudor (tasa de descuento del VAN)
+    cok_anual: Decimal = Decimal("0.18")  # 0.18 = 18% anual
+
     # Costos periódicos
-    seguro_vehicular_pct: Decimal    # % mensual sobre saldo, ej. 0.0050
+    seguro_vehicular_pct: Decimal    # % mensual sobre saldo, ej. 0.0005
     seguro_desgravamen_pct: Decimal  # % mensual sobre saldo, ej. 0.0004
     costo_portes: Decimal = Decimal("0.00")
     costo_comisiones: Decimal = Decimal("0.00")
@@ -67,10 +70,8 @@ class SimulacionCreate(BaseModel):
     @field_validator("plazo_meses")
     @classmethod
     def plazo_valido(cls, v: int) -> int:
-        if not (12 <= v <= 60):
-            raise ValueError("El plazo debe estar entre 12 y 60 meses")
-        if v % 12 != 0:
-            raise ValueError("El plazo debe ser múltiplo de 12")
+        if not (12 <= v <= 72):
+            raise ValueError("El plazo debe estar entre 12 y 72 meses")
         return v
 
     @field_validator("tasa_valor")
@@ -85,6 +86,13 @@ class SimulacionCreate(BaseModel):
     def balon_rango(cls, v: Decimal) -> Decimal:
         if not (Decimal("0.00") <= v <= Decimal("0.50")):
             raise ValueError("El porcentaje de cuota balón debe estar entre 0% y 50%")
+        return v
+
+    @field_validator("cok_anual")
+    @classmethod
+    def cok_positivo(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("El COK anual debe ser mayor a 0")
         return v
     
     

@@ -66,6 +66,7 @@ def crear_simulacion(
             seguro_desgravamen_pct=datos.seguro_desgravamen_pct,
             costo_portes=datos.costo_portes,
             costo_comisiones=datos.costo_comisiones,
+            cok_anual=datos.cok_anual,
             fecha_inicio=datos.fecha_inicio,
         )
     except ValueError as e:
@@ -87,6 +88,7 @@ def crear_simulacion(
         tipo_tasa=datos.tipo_tasa,
         tasa_valor=datos.tasa_valor,
         capitalizacion_m=datos.capitalizacion_m,
+        cok_anual=datos.cok_anual,
         periodos_gracia_total=datos.periodos_gracia_total,
         periodos_gracia_parcial=datos.periodos_gracia_parcial,
         cuota_balon_pct=datos.cuota_balon_pct,
@@ -199,6 +201,7 @@ def actualizar_simulacion(
             seguro_desgravamen_pct=datos.seguro_desgravamen_pct,
             costo_portes=datos.costo_portes,
             costo_comisiones=datos.costo_comisiones,
+            cok_anual=datos.cok_anual,
             fecha_inicio=datos.fecha_inicio,
         )
     except ValueError as e:
@@ -220,6 +223,7 @@ def actualizar_simulacion(
     sim.tipo_tasa = datos.tipo_tasa
     sim.tasa_valor = datos.tasa_valor
     sim.capitalizacion_m = datos.capitalizacion_m
+    sim.cok_anual = datos.cok_anual
 
     sim.periodos_gracia_total = datos.periodos_gracia_total
     sim.periodos_gracia_parcial = datos.periodos_gracia_parcial
